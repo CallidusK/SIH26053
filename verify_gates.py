@@ -246,10 +246,13 @@ def check_gate_b1(data_root: Path, seq_id: str = "04", gt_file: Path | None = No
 
     if resolved_gt is None:
         print(
-            f"Notice: Ground truth relative pose file not found for sequence {seq_id}; "
-            f"skipping Gate B1 comparison."
+            f"Error: Ground truth relative pose file not found for sequence {seq_id}."
         )
-        return
+        print(
+            "Tip: Supply an explicit ground truth file via --gt-file, "
+            "or ensure GROUND_TRUTH_T_rel.txt exists in the sequence directory."
+        )
+        sys.exit(1)
 
     # Parse ground truth T_rel matrices
     gt_matrices: dict[int, np.ndarray] = {}

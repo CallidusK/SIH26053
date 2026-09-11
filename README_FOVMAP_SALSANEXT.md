@@ -54,13 +54,14 @@ Previously, test scripts and verification routines assumed sequence `08` in hard
    - `check_gate_a3(data_root, seq_id="04")`
    - `check_gate_a4(data_root, seq_id="04")`
    - `check_gate_a5(data_root, seq_id="04")`
-   - `check_gate_b1(data_root, seq_id="04")`
+   - `check_gate_b1(data_root, seq_id="04", gt_file=None)`
 2. **Command-Line Interface (CLI)**:
    `verify_gates.py` now includes an `argparse` CLI:
    - `--seq` / `-s`: Sequence ID (default: `"04"`).
    - `--data-root` / `-d`: Root directory containing `sequences/` (default: `sample_kitti`).
-3. **Graceful Diagnostics**:
-   If a sequence directory or file is missing, the script prints an explicit error detailing the missing path and provides actionable guidance (e.g. suggesting `--seq 08` if using the sample data).
+   - `--gt-file` / `-g`: Optional explicit path to ground-truth relative poses file (default: auto-detected from sequence directory).
+3. **Graceful Diagnostics and Strict Validation**:
+   If a sequence directory, scan, poses, calibration, or Gate B1 ground-truth relative pose file is missing, the script prints an explicit error detailing the missing path and actionable guidance (e.g. suggesting `--seq 08` if using sample data), exiting nonzero rather than silently passing.
 
 ### Environment Setup (Virtual Environment)
 
