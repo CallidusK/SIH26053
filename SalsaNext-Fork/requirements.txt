@@ -1,0 +1,14 @@
+# python == 3.10.21
+
+torch
+torchvision
+numpy
+scipy
+PyYAML
+Pillow
+matplotlib
+opencv-python
+tensorboard
+pykitti
+vispy
+pyqt6

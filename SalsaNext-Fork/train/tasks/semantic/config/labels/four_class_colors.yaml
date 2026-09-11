@@ -1,0 +1,7 @@
+# Colors for the four-class prediction files written by semantic inference.
+# The visualizer expects BGR values and converts them for display.
+color_map:
+  0: [80, 80, 80]      # non-drivable: gray
+  1: [0, 180, 0]       # drivable: green
+  2: [255, 100, 0]     # static obstacle: blue
+  3: [0, 0, 255]       # dynamic object: red
