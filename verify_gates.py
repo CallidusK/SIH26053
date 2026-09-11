@@ -15,7 +15,7 @@ from fovmap.data.loader import (
     compute_T_rel,
     SemanticKITTILoader,
 )
-from fovmap.data.remap import map_to_4_classes
+from fovmap.data.remap import map_to_4_classes, LEARNING_MAP_INV
 
 
 def check_gate_a1(
@@ -214,7 +214,7 @@ def check_gate_a5(data_root: Path, seq_id: str = "04"):
     print(" Gate A5 PASSED! All frames iterated cleanly.")
 
 
-def check_gate_b1(data_root: Path, seq_id: str = "04"):
+def check_gate_b1(data_root: Path, seq_id: str = "04", gt_file: Path | None = None):
     print(f"\n=== GATE B1: Relative Pose T_rel Verification [Seq: {seq_id}] ===")
     seq_dir = data_root / "sequences" / seq_id
     if not seq_dir.exists():
@@ -224,20 +224,36 @@ def check_gate_b1(data_root: Path, seq_id: str = "04"):
 
     loader = SemanticKITTILoader(seq_dir)
 
-    gt_file = data_root / "GROUND_TRUTH_T_rel.txt"
-    if not gt_file.exists():
-        gt_file = seq_dir / "GROUND_TRUTH_T_rel.txt"
+    # Dynamically locate ground truth file matching the current sequence
+    resolved_gt: Path | None = None
+    if gt_file is not None:
+        if not gt_file.exists():
+            print(f"Error: Explicitly specified ground truth file not found: {gt_file}")
+            sys.exit(1)
+        resolved_gt = gt_file
+    else:
+        candidate_paths = [
+            seq_dir / f"GROUND_TRUTH_T_rel_{seq_id}.txt",
+            seq_dir / "GROUND_TRUTH_T_rel.txt",
+            data_root / f"GROUND_TRUTH_T_rel_{seq_id}.txt",
+            data_root / f"GROUND_TRUTH_T_rel_seq{seq_id}.txt",
+        ]
 
-    if not gt_file.exists():
+        for p in candidate_paths:
+            if p.exists():
+                resolved_gt = p
+                break
+
+    if resolved_gt is None:
         print(
-            f"Notice: Ground truth relative pose file not found at {gt_file}; "
-            f"skipping comparison for sequence {seq_id}."
+            f"Notice: Ground truth relative pose file not found for sequence {seq_id}; "
+            f"skipping Gate B1 comparison."
         )
         return
 
     # Parse ground truth T_rel matrices
     gt_matrices: dict[int, np.ndarray] = {}
-    with open(gt_file, "r") as f:
+    with open(resolved_gt, "r") as f:
         lines = [
             line.strip()
             for line in f
@@ -303,17 +319,28 @@ def check_gate_remap():
     assert mapped[72] == 0, "Terrain (72) should be TERRAIN (0)"
     assert mapped[48] == 0, "Sidewalk (48) should be TERRAIN (0)"
 
+    # Verify inverse learning map lookup table (20 classes)
+    assert len(LEARNING_MAP_INV) == 20, "LEARNING_MAP_INV must have 20 entries"
+    assert LEARNING_MAP_INV[1] == 10, "Learning class 1 (car) should map to raw ID 10"
+    assert LEARNING_MAP_INV[9] == 40, "Learning class 9 (road) should map to raw ID 40"
+    assert LEARNING_MAP_INV[13] == 50, "Learning class 13 (building) should map to raw ID 50"
+    assert LEARNING_MAP_INV[17] == 72, "Learning class 17 (terrain) should map to raw ID 72"
+
     print(" Gate REMAP PASSED! Lookup table mapping is correct.")
 
 
-def run_all_gates(data_root: Path, seq_id: str = "04"):
+def run_all_gates(
+    data_root: Path,
+    seq_id: str = "04",
+    gt_file: Path | None = None,
+):
     """Execute all Person 1 verification gates for a given sequence."""
     check_gate_a1(data_root, seq_id=seq_id)
     check_gate_a2(data_root, seq_id=seq_id)
     check_gate_a3(data_root, seq_id=seq_id)
     check_gate_a4(data_root, seq_id=seq_id)
     check_gate_a5(data_root, seq_id=seq_id)
-    check_gate_b1(data_root, seq_id=seq_id)
+    check_gate_b1(data_root, seq_id=seq_id, gt_file=gt_file)
     check_gate_remap()
 
 
@@ -335,6 +362,17 @@ if __name__ == "__main__":
         default="04",
         help="Sequence ID to test (default: '04')",
     )
+    parser.add_argument(
+        "--gt-file",
+        "-g",
+        type=Path,
+        default=None,
+        help="Optional explicit path to ground-truth T_rel file (default: auto-detect by seq_id)",
+    )
 
     args = parser.parse_args()
-    run_all_gates(data_root=args.data_root, seq_id=args.seq)
+    run_all_gates(
+        data_root=args.data_root,
+        seq_id=args.seq,
+        gt_file=args.gt_file,
+    )

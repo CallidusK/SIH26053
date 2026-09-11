@@ -34,7 +34,7 @@ Raw KITTI LiDAR (.bin)
 ```
 
 ### Roles and Boundaries
-- **Person 1 (`fovmap.data`)**: Fast ingestion of binary LiDAR scans, camera-to-LiDAR calibration parsing (`Tr`), pose tracking, relative transformation calculation (`T_rel`), and taxonomy mapping (`remap.py`).
+- **Person 1 (`fovmap.data`)**: Fast ingestion of binary LiDAR scans, Velodyne-to-camera calibration transform parsing (`Tr`), pose tracking, relative transformation calculation (`T_rel`), and taxonomy mapping (`remap.py`).
 - **Persons 2 & 3 (`fovmap.segmentation` / SalsaNext)**: Range-image projection, SalsaNext forward inference, pixel-to-point unprojection, and uncertainty estimation.
 - **Person 4 (`fovmap.grid`)**: Spatial aggregation of labeled points into concentric foveated rings (5cm inner, up to 50cm outer).
 - **Person 5 (`fovmap.rating`)**: Traversability calculation, dynamic object tagging, and log-odds map fusion using `T_rel`.
@@ -143,7 +143,7 @@ for frame_idx, (points, pose, pose_prev, Tr, frame_id) in enumerate(loader):
 | **Gate A3** | `calib.txt` | Tr parsed to (4, 4), bottom row [0, 0, 0, 1], rotation matrix det(R) ~ 1.0 |
 | **Gate A4** | `SemanticKITTILoader[0]` | Frame 0 retrieval, pose_prev is identity, types and shapes correct |
 | **Gate A5** | Full Sequence | Iterates all `.bin` files in sequence, verifying non-empty point clouds and clean loading |
-| **Gate B1** | Relative Pose `T_rel` | Compares computed relative motion against ground-truth transitions |
+| **Gate B1** | Relative Pose `T_rel` | Dynamically resolves and compares computed relative motion against sequence ground-truth transitions |
 | **Gate REMAP** | 4-Class Taxonomy | Verifies O(1) LUT correctly maps 260 SemanticKITTI classes to 4 target classes |
 
 ---
@@ -201,19 +201,25 @@ SalsaNext outputs predictions over 20 learning classes (from SemanticKITTI class
 
 ### Using `fovmap.data.remap`
 
-The remapping uses a pre-allocated lookup table of 260 entries (`_REMAP_LUT` in `src/fovmap/data/remap.py`):
+SalsaNext outputs 20 learning classes (`0` to `19`). The pipeline converts these predictions in two O(1) steps:
+1. **Inverse Learning Map (`LEARNING_MAP_INV`)**: Converts 20 learning classes back to raw SemanticKITTI IDs (0 to 259).
+2. **Taxonomy Remap (`map_to_4_classes`)**: Maps raw SemanticKITTI IDs to the 4 target classes via a pre-allocated 260-element lookup table (`_REMAP_LUT`):
 
 ```python
 import numpy as np
-from fovmap.data.remap import map_to_4_classes
+from fovmap.data.remap import map_to_4_classes, LEARNING_MAP_INV
 
-# Example: Predictions from model unprojection
-raw_predictions = np.array([40, 50, 10, 72, 252], dtype=np.uint32)
+# Step 1: SalsaNext outputs 20 learning classes (0 to 19)
+# e.g., 9 (road), 13 (building), 1 (car), 17 (terrain)
+learning_preds = np.array([9, 13, 1, 17], dtype=np.uint32)
 
-# Fast vectorized O(1) lookup
-mapped = map_to_4_classes(raw_predictions)
+# Step 2: Convert to raw SemanticKITTI IDs (0 to 259)
+raw_kitti_ids = LEARNING_MAP_INV[learning_preds]
+# Result: array([40, 50, 10, 72])
 
-# Result: array([1, 2, 3, 0, 3], dtype=uint8)
+# Step 3: Rapidly map raw SemanticKITTI IDs to the 4-class taxonomy
+mapped = map_to_4_classes(raw_kitti_ids)
+# Result: array([1, 2, 3, 0], dtype=uint8) (DRIVABLE, STATIC, OBJECT, TERRAIN)
 print(mapped)
 ```
 
@@ -271,7 +277,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from fovmap.data.loader import SemanticKITTILoader
-from fovmap.data.remap import map_to_4_classes
+from fovmap.data.remap import map_to_4_classes, LEARNING_MAP_INV
 
 def project_range_image(points, H=64, W=2048, fov_up=3.0, fov_down=-25.0):
     """
@@ -344,16 +350,29 @@ if __name__ == "__main__":
 
     # 3. Simulate SalsaNext predictions (e.g. shape H, W)
     # In practice: preds = salsanext_model(torch.from_numpy(range_img).unsqueeze(0))
-    dummy_preds = np.random.choice([40, 50, 10, 72], size=(64, 2048))
+    # SalsaNext outputs 20 learning classes (0 to 19):
+    # e.g., 1 (car), 9 (road), 13 (building), 17 (terrain)
+    dummy_learning_preds = np.random.choice([1, 9, 13, 17], size=(64, 2048)).astype(np.uint32)
 
     # 4. Unproject image labels back to original point cloud
-    point_labels = np.zeros(points.shape[0], dtype=np.uint32)
-    valid_mask = point_indices >= 0
-    point_labels[point_indices[valid_mask]] = dummy_preds[valid_mask]
+    # Points without a valid projection (filtered by depth or lost to pixel collisions)
+    # are assigned UNKNOWN (255) rather than being falsely mapped to 0 (TERRAIN).
+    UNKNOWN_LABEL = 255
+    classes_4 = np.full(points.shape[0], UNKNOWN_LABEL, dtype=np.uint8)
 
-    # 5. Fast O(1) Taxonomy Remap
-    classes_4 = map_to_4_classes(point_labels)
-    print(f"Mapped classes shape: {classes_4.shape}, unique: {np.unique(classes_4)}")
+    valid_mask = point_indices >= 0
+    projected_pt_indices = point_indices[valid_mask]
+    projected_learning_labels = dummy_learning_preds[valid_mask]
+
+    # Convert valid projected learning IDs to raw SemanticKITTI IDs (0-259)
+    projected_raw_kitti_labels = LEARNING_MAP_INV[projected_learning_labels]
+
+    # 5. Fast O(1) Taxonomy Remap for valid projected points
+    classes_4[projected_pt_indices] = map_to_4_classes(projected_raw_kitti_labels)
+
+    valid_pts_count = np.sum(classes_4 != UNKNOWN_LABEL)
+    print(f"Total points: {points.shape[0]}, valid projected & labeled: {valid_pts_count}")
+    print(f"Projected classes unique: {np.unique(classes_4[classes_4 != UNKNOWN_LABEL])}")
 ```
 
 ---

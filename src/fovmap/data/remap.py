@@ -22,6 +22,32 @@ _REMAP_LUT[[
     252, 253, 254, 255, 256, 257, 258, 259
 ]] = OBJECT
 
+# Inverse learning map: maps SalsaNext 20 learning classes (0 to 19)
+# back to standard SemanticKITTI raw class IDs (0 to 259).
+# Aligned with SalsaNext's config/labels/semantic-kitti.yaml: learning_map_inv
+LEARNING_MAP_INV = np.array([
+    0,   # 0: unlabeled
+    10,  # 1: car
+    11,  # 2: bicycle
+    15,  # 3: motorcycle
+    18,  # 4: truck
+    20,  # 5: other-vehicle
+    30,  # 6: person
+    31,  # 7: bicyclist
+    32,  # 8: motorcyclist
+    40,  # 9: road
+    44,  # 10: parking
+    48,  # 11: sidewalk
+    49,  # 12: other-ground
+    50,  # 13: building
+    51,  # 14: fence
+    70,  # 15: vegetation
+    71,  # 16: trunk
+    72,  # 17: terrain
+    80,  # 18: pole
+    81,  # 19: traffic-sign
+], dtype=np.uint32)
+
 def map_to_4_classes(pred: np.ndarray) -> np.ndarray:
     """
     Rapidly maps SemanticKITTI class IDs to 4 overarching classes
