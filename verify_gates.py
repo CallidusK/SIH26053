@@ -277,6 +277,12 @@ def check_gate_b1(data_root: Path, seq_id: str = "04", gt_file: Path | None = No
         else:
             i += 1
 
+    if not gt_matrices:
+        print(
+            f"Error: No valid relative pose transitions found in {resolved_gt}."
+        )
+        sys.exit(1)
+
     # Check frame 0 is identity
     t_rel_0 = loader.get_T_rel(0)
     assert np.allclose(t_rel_0, np.eye(4, dtype=np.float64)), (
