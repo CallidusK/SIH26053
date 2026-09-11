@@ -12,7 +12,7 @@ This document serves as an in-depth audit and integration guide for the rest of 
 ---
 
 ## 1. Executive Summary
-The Person 1 deliverable (`kitti_loader.py` + `remap.py`) successfully abstracts the messy reality of the SemanticKITTI dataset into a clean, iterable interface. It discovers `.bin` scans automatically, parses calibration/pose text files, safely computes LiDAR-relative motion (`T_rel`), and instantly maps 32-bit semantic class IDs into the 4-class taxonomy using an O(1) lookup table. 
+The Person 1 deliverable (`src/fovmap/data/loader.py` + `src/fovmap/data/remap.py`) successfully abstracts the messy reality of the SemanticKITTI dataset into a clean, iterable interface. It discovers `.bin` scans automatically, parses calibration/pose text files, safely computes LiDAR-relative motion (`T_rel`), and instantly maps 32-bit semantic class IDs into the 4-class taxonomy using an O(1) lookup table. 
 
 All gates (A1-A5, B1, and REMAP) have passed verification.
 
@@ -24,7 +24,7 @@ If you are Persons 2, 3, 4, 5, or 6, this is how you interact with the pipeline:
 
 ### Initializing the Loader
 ```python
-from kitti_loader import SemanticKITTILoader
+from fovmap.data.loader import SemanticKITTILoader
 
 # Point it to the specific sequence directory
 loader = SemanticKITTILoader("data/sequences/08")
@@ -65,7 +65,7 @@ T_rel = loader.get_T_rel(frame_id)
 Once the neural network outputs raw SemanticKITTI class IDs, map them to the 4 categories instantly:
 
 ```python
-from remap import map_to_4_classes
+from fovmap.data.remap import map_to_4_classes
 
 # 'raw_preds' is an array of IDs from 0 to 259
 mapped_classes = map_to_4_classes(raw_preds)
@@ -78,7 +78,7 @@ mapped_classes = map_to_4_classes(raw_preds)
 
 This section explains the internal logic of every function written by Person 1 to ensure transparency across the team.
 
-### `kitti_loader.py`
+### `src/fovmap/data/loader.py`
 
 #### `load_point_cloud(bin_path, dtype, num_fields)`
 - **What it does:** Reads a raw binary LiDAR sweep.
@@ -108,7 +108,7 @@ This section explains the internal logic of every function written by Person 1 t
 
 ---
 
-### `remap.py`
+### `src/fovmap/data/remap.py`
 
 #### `map_to_4_classes(pred)`
 - **What it does:** Reduces the 260 possible SemanticKITTI classes down to 4 core groups: `TERRAIN (0)`, `DRIVABLE (1)`, `STATIC (2)`, and `OBJECT (3)`.

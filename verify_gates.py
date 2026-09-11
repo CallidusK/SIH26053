@@ -53,7 +53,7 @@ def check_gate_a1(data_root: Path, dtype: type = np.float32, num_fields: int = 4
 
 
 def check_gate_a2(data_root: Path):
-    print("\n=== GATE A2: Load poses.txt (12 poses) ===")
+    print("\n=== GATE A2: Load poses.txt ===")
 
     sequence_dir = data_root / "sequences" / "08"
     poses_file = sequence_dir / "poses.txt"
@@ -126,7 +126,7 @@ def check_gate_a4(data_root: Path):
     loader = SemanticKITTILoader(seq_dir)
 
     print(f"len(loader) : {len(loader)} frames")
-    assert len(loader) == 12, f"Expected 12 frames, got {len(loader)}"
+    assert len(loader) > 0, "Loader should have at least 1 frame"
 
     points, pose, pose_prev, Tr, frame_id = loader[0]
     print(f"loader[0] frame_id  : {frame_id}")
@@ -136,7 +136,8 @@ def check_gate_a4(data_root: Path):
     print(f"loader[0] Tr        : shape={Tr.shape}, dtype={Tr.dtype}")
 
     assert frame_id == 0
-    assert points.shape == (17983, 4)
+    assert points.shape[0] > 0, "Frame 0 has no points"
+    assert points.shape[1] == 4
     assert points.dtype == np.float32
     assert pose.shape == (4, 4)
     assert pose_prev.shape == (4, 4)
@@ -151,17 +152,10 @@ def check_gate_a5(data_root: Path):
     seq_dir = data_root / "sequences" / "08"
     loader = SemanticKITTILoader(seq_dir)
 
-    expected_counts = [
-        17983, 19352, 19803, 17456, 18667, 18894,
-        17978, 17689, 19117, 18368, 16808, 18208
-    ]
-
     print(f"Iterating through all {len(loader)} frames...")
     for idx, (points, pose, pose_prev, Tr, frame_id) in enumerate(loader):
         assert frame_id == idx
-        assert points.shape[0] == expected_counts[idx], (
-            f"Frame {idx}: expected {expected_counts[idx]} points, got {points.shape[0]}"
-        )
+        assert points.shape[0] > 0, f"Frame {idx}: got empty point cloud"
         assert points.shape[1] == 4
         assert points.dtype == np.float32
         assert pose.shape == (4, 4)

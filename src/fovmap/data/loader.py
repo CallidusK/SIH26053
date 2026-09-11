@@ -177,7 +177,8 @@ class SemanticKITTILoader:
 
     def get_T_rel(self, idx: int) -> np.ndarray:
         """Computes relative LiDAR-frame pose for frame index `idx`."""
+        if idx < 0 or idx >= len(self.scan_files):
+            raise IndexError(f"Frame index {idx} out of range [0, {len(self.scan_files) - 1}]")
         if idx == 0:
             return np.eye(4, dtype=np.float64)
-        _, pose_curr, pose_prev, Tr, _ = self[idx]
-        return compute_T_rel(pose_curr, pose_prev, Tr)
+        return compute_T_rel(self.poses[idx], self.poses[idx - 1], self.Tr)
