@@ -112,8 +112,7 @@ class User():
                       self.parser.get_n_classes())
 
     if self.gpu:
-      cudnn.benchmark = True
-      cudnn.fastest = True
+      cudnn.benchmark = False
 
   def infer(self):
     cnn = []
@@ -157,7 +156,7 @@ class User():
     if self.gpu:
       torch.cuda.empty_cache()
 
-    with torch.no_grad():
+    with torch.inference_mode():
       end = time.time()
 
       for i, (proj_in, proj_mask, _, _, path_seq, path_name, p_x, p_y, proj_range, unproj_range, _, _, _, _, npoints) in enumerate(loader):
@@ -170,12 +169,12 @@ class User():
         path_name = path_name[0]
 
         if self.gpu:
-          proj_in = proj_in.cuda()
-          p_x = p_x.cuda()
-          p_y = p_y.cuda()
+          proj_in = proj_in.to(self.device)
+          p_x = p_x.to(self.device)
+          p_y = p_y.to(self.device)
           if self.post:
-            proj_range = proj_range.cuda()
-            unproj_range = unproj_range.cuda()
+            proj_range = proj_range.to(self.device)
+            unproj_range = unproj_range.to(self.device)
 
         #compute output
         if self.uncertainty:
