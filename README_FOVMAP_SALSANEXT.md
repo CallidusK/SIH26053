@@ -1,394 +1,306 @@
-# FOVMAP + SalsaNext: Integration Guide & Pipeline Reference
+# FOVMAP + SalsaNext: Quickstart & Pipeline Guide
 
-A unified guide to integrating the **FOVMAP** 2.5D foveated LiDAR grid mapping pipeline with the **SalsaNext** real-time uncertainty-aware semantic segmentation neural network.
+Welcome! This guide explains how to use the **FOVMAP** LiDAR data pipeline and connect it with the **SalsaNext** semantic segmentation model.
 
----
-
-## 1. System Overview & Architecture
-
-The objective of this system is to build an online, robot-centric, 2.5D foveated elevation and semantic grid map from 3D LiDAR point clouds at autonomous driving sensor frame rates (10 Hz or higher).
-
-### The Pipeline Workflow
-
-```
-Raw KITTI LiDAR (.bin)
-         │
-         ▼
-[fovmap.data.loader] ────────► Raw Point Cloud: (N, 4) [x, y, z, intensity]
-         │                     Extrinsics & Poses: T_rel (4, 4)
-         │
-         ▼
-[Spherical Range Projection] ─► Range Image Tensor: (5, 64, 2048) [range, x, y, z, remission]
-         │
-         ▼
-[SalsaNext Neural Network] ──► 20-Class Logits: (20, 64, 2048) + Epistemic Uncertainty
-         │
-         ▼
-[Point-Wise Unprojection] ───► Point-Wise Semantic Classes (0 to 19 or 0 to 259)
-         │
-         ▼
-[fovmap.data.remap] ─────────► 4-Class Taxonomy: (N,) uint8 [TERRAIN, DRIVABLE, STATIC, OBJECT]
-         │
-         ▼
-[2.5D Foveated Grid Engine] ──► Multi-ring Elevation & Occupancy Grid (10m, 25m, 50m rings)
-```
-
-### Roles and Boundaries
-- **Person 1 (`fovmap.data`)**: Fast ingestion of binary LiDAR scans, Velodyne-to-camera calibration transform parsing (`Tr`), pose tracking, relative transformation calculation (`T_rel`), and taxonomy mapping (`remap.py`).
-- **Persons 2 & 3 (`fovmap.segmentation` / SalsaNext)**: Range-image projection, SalsaNext forward inference, pixel-to-point unprojection, and uncertainty estimation.
-- **Person 4 (`fovmap.grid`)**: Spatial aggregation of labeled points into concentric foveated rings (5cm inner, up to 50cm outer).
-- **Person 5 (`fovmap.rating`)**: Traversability calculation, dynamic object tagging, and log-odds map fusion using `T_rel`.
-- **Person 6 (`fovmap.dashboard`)**: Headless latency benchmark tracking and UI visualization.
+Whether you are running verification tests, loading LiDAR sweeps, or preparing range images for neural network inference, this document will get you up to speed in minutes.
 
 ---
 
-## 2. Parameterized Sequence Selection (Recent Changes)
+## ⚡ Quickstart in 30 Seconds
 
-Previously, test scripts and verification routines assumed sequence `08` in hardcoded path strings. The verification harness (`verify_gates.py`) has been fully refactored to remove all hardcoded sequence dependencies.
+Follow these three steps to get everything running right away.
 
-### Key Changes
-1. **Configurable Sequence Parameter**:
-   All verification gates now accept `seq_id` as a parameter (defaulting to `"04"`):
-   - `check_gate_a1(data_root, seq_id="04", ...)`
-   - `check_gate_a2(data_root, seq_id="04")`
-   - `check_gate_a3(data_root, seq_id="04")`
-   - `check_gate_a4(data_root, seq_id="04")`
-   - `check_gate_a5(data_root, seq_id="04")`
-   - `check_gate_b1(data_root, seq_id="04", gt_file=None)`
-2. **Command-Line Interface (CLI)**:
-   `verify_gates.py` now includes an `argparse` CLI:
-   - `--seq` / `-s`: Sequence ID (default: `"04"`).
-   - `--data-root` / `-d`: Root directory containing `sequences/` (default: `sample_kitti`).
-   - `--gt-file` / `-g`: Optional explicit path to ground-truth relative poses file (default: auto-detected from sequence directory).
-3. **Graceful Diagnostics and Strict Validation**:
-   If a sequence directory, scan, poses, calibration, or Gate B1 ground-truth relative pose file is missing, the script prints an explicit error detailing the missing path and actionable guidance (e.g. suggesting `--seq 08` if using sample data), exiting nonzero rather than silently passing.
-
-### Environment Setup (Virtual Environment)
-
-On macOS and Linux, the system shell may not alias `python` by default, leading to `zsh: command not found: python`. Dependencies (like `numpy`) are installed inside the repository's `.venv`.
-
-You can run commands using either of these two methods:
-
+### 1. Open your terminal in this repository
 ```bash
-# Method 1: Activate the virtual environment (recommended)
+cd /path/to/Numpytest
+```
+
+### 2. Activate the Python environment
+This project uses a pre-configured virtual environment with NumPy installed:
+```bash
 source .venv/bin/activate
-python verify_gates.py -s 08
+```
+*(If your terminal does not have `python` on your path, you can also run commands directly with `./.venv/bin/python`)*
 
-# Method 2: Run directly via virtual environment python binary
-./.venv/bin/python verify_gates.py -s 08
+### 3. Run the pipeline verification
+The sample dataset includes KITTI Sequence **08**. Run the verification script with the `-s 08` flag:
+```bash
+python verify_gates.py -s 08
+```
+
+You should see all 7 verification gates pass cleanly:
+```text
+=== GATE A1: Read one .bin scan (000000.bin) [Seq: 08] ===
+ Gate A1 PASSED!
+=== GATE A2: Load poses.txt [Seq: 08] ===
+ Gate A2 PASSED!
+=== GATE A3: Parse Tr from calib.txt [Seq: 08] ===
+ Gate A3 PASSED!
+=== GATE A4: SemanticKITTILoader Frame 0 Access [Seq: 08] ===
+ Gate A4 PASSED!
+=== GATE A5: Full-Sequence Multi-Frame Iteration [Seq: 08] ===
+ Gate A5 PASSED! All frames iterated cleanly.
+=== GATE B1: Relative Pose T_rel Verification [Seq: 08] ===
+ Gate B1 PASSED! Relative poses match ground truth perfectly.
+=== GATE REMAP: 19->4 Semantic Mapping ===
+ Gate REMAP PASSED! Lookup table mapping is correct.
 ```
 
 ---
 
-### How to Run Verification
+## 🧭 What Does This Code Do?
 
-#### A. Verifying a Single Sequence via CLI
-Use `--seq` / `-s` to choose which sequence to verify, and `--data-root` / `-d` to specify the dataset directory:
+In self-driving systems, a LiDAR sensor spins on top of the car, recording hundreds of thousands of 3D distance points every second. Our goal is to take those raw points and turn them into a real-time, 2.5D elevation and obstacle map around the vehicle.
 
-```bash
-# Verify sequence 08 on the sample dataset
-python verify_gates.py -s 08
+Here is how data flows from the raw sensor to the final map:
 
-# Verify sequence 04 on a full SemanticKITTI dataset
-python verify_gates.py -d /path/to/SemanticKITTI/dataset -s 04
+```text
+Raw KITTI LiDAR (.bin file)
+       │
+       ▼
+[fovmap.data.loader]
+       │  • Reads (N, 4) point cloud: [x, y, z, intensity]
+       │  • Computes relative car motion between frames: T_rel (4, 4)
+       ▼
+[Range Image Projection]
+       │  • Flattens 3D points into a 2D cylindrical range image: (5, 64, 2048)
+       ▼
+[SalsaNext Neural Network]
+       │  • Classifies each pixel into 20 classes (road, car, person, tree, etc.)
+       ▼
+[Point Unprojection]
+       │  • Projects 2D predicted labels back onto the 3D points
+       ▼
+[fovmap.data.remap]
+       │  • Compresses predictions into 4 clean categories:
+       │    TERRAIN (0), DRIVABLE (1), STATIC (2), OBJECT (3)
+       ▼
+[2.5D Grid Engine]
+       • Builds concentric elevation rings (dense nearby, coarse further away)
 ```
 
-#### B. Verifying a Single .bin Scan Directly
-To inspect or debug a single binary point cloud scan without running all gates:
+---
+
+## 📁 Repository Tour
+
+Here are the key files and directories you will interact with:
+
+```text
+├── README_FOVMAP_SALSANEXT.md   # This guide!
+├── verify_gates.py              # Test script verifying data integrity and poses
+├── src/
+│   └── fovmap/
+│       └── data/
+│           ├── __init__.py
+│           ├── loader.py        # Fast scan reading, calibration parsing & T_rel
+│           └── remap.py         # Instant 20-to-4 class taxonomy lookup tables
+└── sample_kitti/
+    └── sequences/
+        └── 08/                  # Minimal 12-frame sample data (scans, poses, calib)
+```
+
+---
+
+## 🛠️ Step-by-Step Code Examples
+
+### 1. Reading a Single LiDAR Scan
+
+Every `.bin` file in the KITTI dataset stores 3D points as raw 32-bit floats (`x`, `y`, `z`, `intensity`).
 
 ```python
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
+# Add src to python path
+sys.path.insert(0, str(Path("src").resolve()))
 from fovmap.data.loader import load_point_cloud
 
-# Read any .bin file directly
-bin_file = Path("sample_kitti/sequences/08/velodyne/000000.bin")
-points = load_point_cloud(bin_file)
+# Load frame 0 of sequence 08
+bin_path = Path("sample_kitti/sequences/08/velodyne/000000.bin")
+points = load_point_cloud(bin_path)
 
-print(f"Total points : {points.shape[0]}")
-print(f"Shape        : {points.shape}")      # (N, 4)
-print(f"Dtype        : {points.dtype}")      # float32
-print(f"x range      : [{points[:, 0].min():.2f}, {points[:, 0].max():.2f}] m")
-print(f"y range      : [{points[:, 1].min():.2f}, {points[:, 1].max():.2f}] m")
-print(f"z range      : [{points[:, 2].min():.2f}, {points[:, 2].max():.2f}] m")
-print(f"Intensity    : [{points[:, 3].min():.2f}, {points[:, 3].max():.2f}]")
+print(f"Points shape : {points.shape}")  # e.g., (17983, 4)
+print(f"Data type    : {points.dtype}")  # float32
+print(f"First point  : x={points[0,0]:.2f}m, y={points[0,1]:.2f}m, z={points[0,2]:.2f}m, intensity={points[0,3]:.2f}")
 ```
 
-#### C. Verifying an Entire Sequence of .bin Scans
-To iterate through all scans in a sequence, check point counts, and track translation:
+---
+
+### 2. Loading an Entire Sequence with `SemanticKITTILoader`
+
+The `SemanticKITTILoader` class acts like a list of frames. You can look up any frame by its index or loop through the entire sequence:
 
 ```python
 from pathlib import Path
 from fovmap.data.loader import SemanticKITTILoader
 
+# Open the sequence directory
 seq_dir = Path("sample_kitti/sequences/08")
 loader = SemanticKITTILoader(seq_dir)
 
-print(f"Sequence has {len(loader)} total frames.")
+print(f"Total frames in sequence: {len(loader)}")
 
-for frame_idx, (points, pose, pose_prev, Tr, frame_id) in enumerate(loader):
-    assert points.shape[1] == 4
-    assert points.shape[0] > 0
-    t = pose[:3, 3]
-    print(f"Frame {frame_id:04d}: {points.shape[0]} points, translation = [{t[0]:.2f}, {t[1]:.2f}, {t[2]:.2f}] m")
+# Access a specific frame
+points, pose_curr, pose_prev, Tr, frame_id = loader[0]
+print(f"Loaded frame {frame_id} with {len(points)} points")
+
+# Loop over the whole sequence
+for points, pose, pose_prev, Tr, frame_id in loader:
+    car_x, car_y, car_z = pose[0, 3], pose[1, 3], pose[2, 3]
+    print(f"Frame {frame_id:02d} | Car position: x={car_x:.1f}m, y={car_y:.1f}m, z={car_z:.1f}m")
 ```
-
-#### D. What the Verification Gates Check
-
-| Gate | Target | What is Verified |
-|---|---|---|
-| **Gate A1** | Single `.bin` scan | 4-float fields (x, y, z, intensity), file byte-size divisibility, finite values, intensity in [0, 1] |
-| **Gate A2** | `poses.txt` | (N, 12) parsed into (N, 4, 4) poses, pose[0] is identity, translation steps between 0.1m and 5.0m |
-| **Gate A3** | `calib.txt` | Tr parsed to (4, 4), bottom row [0, 0, 0, 1], rotation matrix det(R) ~ 1.0 |
-| **Gate A4** | `SemanticKITTILoader[0]` | Frame 0 retrieval, pose_prev is identity, types and shapes correct |
-| **Gate A5** | Full Sequence | Iterates all `.bin` files in sequence, verifying non-empty point clouds and clean loading |
-| **Gate B1** | Relative Pose `T_rel` | Dynamically resolves and compares computed relative motion against sequence ground-truth transitions |
-| **Gate REMAP** | 4-Class Taxonomy | Verifies O(1) LUT correctly maps 260 SemanticKITTI classes to 4 target classes |
 
 ---
 
-## 3. Interfacing with SalsaNext
+### 3. Understanding Relative Motion (`T_rel`)
 
-SalsaNext operates on 2D cylindrical range images rather than raw unorganized 3D point clouds. This section explains how to format inputs and handle outputs.
+When building a map while driving, we keep the map **robot-centric** (the car is always at `[0, 0, 0]` in the current frame). To combine the new scan with older scans, we need to know how much the car moved between frames:
 
-### 3.1 Input Tensor Format: (5, H, W)
-SalsaNext expects a 5-channel range image:
-- **Channel 0**: Range (depth) `r = sqrt(x^2 + y^2 + z^2)`
-- **Channel 1**: `x` coordinate
-- **Channel 2**: `y` coordinate
-- **Channel 3**: `z` coordinate
-- **Channel 4**: Remission (LiDAR intensity normalized between 0.0 and 1.0)
-
-Typical grid dimensions for Velodyne HDL-64E:
-- Height `H = 64` (number of laser vertical beams)
-- Width `W = 2048` (azimuthal horizontal resolution)
-
-### 3.2 Spherical Projection Geometry (Plain Text)
-
-To project a point `P = [x, y, z]` into spherical coordinates:
-- Range: `r = sqrt(x^2 + y^2 + z^2)`
-- Azimuth (yaw): `yaw = -atan2(y, x)`
-- Elevation (pitch): `pitch = arcsin(z / r)`
-
-Given sensor field of view:
-- `fov_up = 3.0 degrees` (+0.0524 rad)
-- `fov_down = -25.0 degrees` (-0.4363 rad)
-- Total vertical FOV: `fov = fov_up - fov_down = 28.0 degrees` (+0.4887 rad)
-
-Calculating image coordinates `(u, v)`:
-- Column index `u`:
-  `u = 0.5 * (1.0 - yaw / pi) * W`
-  `u = clip(floor(u), 0, W - 1)`
-- Row index `v`:
-  `v = (1.0 - (pitch + abs(fov_down)) / fov) * H`
-  `v = clip(floor(v), 0, H - 1)`
-
----
-
-## 4. Semantic Label Remapping (O(1) LUT)
-
-SalsaNext outputs predictions over 20 learning classes (from SemanticKITTI classes 0 to 259). For 2.5D foveated elevation and occupancy mapping, the system compresses these into a 4-class taxonomy.
-
-### The 4-Class Taxonomy
-
-| Class ID | Class Name | Included SemanticKITTI Classes | Mapping Purpose |
-|---|---|---|---|
-| `0` | **TERRAIN** | Unlabeled (0), Outlier (1), Sidewalk (48), Terrain (72), Vegetation (70) | Ground cells that are not designated for driving |
-| `1` | **DRIVABLE** | Road (40), Parking (44), Other-ground (49), Lane-marking (60) | Surfaces safely traversable by the vehicle |
-| `2` | **STATIC** | Building (50), Fence (51), Pole (80), Traffic-sign (81), Trunk (71) | Rigid non-traversable architectural obstacles |
-| `3` | **OBJECT** | Car (10), Bicycle (11), Motorcycle (15), Truck (18), Person (30), Moving-* (252-259) | Dynamic or movable actors requiring change detection |
-
-### Using `fovmap.data.remap`
-
-SalsaNext outputs 20 learning classes (`0` to `19`). The pipeline converts these predictions in two O(1) steps:
-1. **Inverse Learning Map (`LEARNING_MAP_INV`)**: Converts 20 learning classes back to raw SemanticKITTI IDs (0 to 259).
-2. **Taxonomy Remap (`map_to_4_classes`)**: Maps raw SemanticKITTI IDs to the 4 target classes via a pre-allocated 260-element lookup table (`_REMAP_LUT`):
-
-```python
-import numpy as np
-from fovmap.data.remap import map_to_4_classes, LEARNING_MAP_INV
-
-# Step 1: SalsaNext outputs 20 learning classes (0 to 19)
-# e.g., 9 (road), 13 (building), 1 (car), 17 (terrain)
-learning_preds = np.array([9, 13, 1, 17], dtype=np.uint32)
-
-# Step 2: Convert to raw SemanticKITTI IDs (0 to 259)
-raw_kitti_ids = LEARNING_MAP_INV[learning_preds]
-# Result: array([40, 50, 10, 72])
-
-# Step 3: Rapidly map raw SemanticKITTI IDs to the 4-class taxonomy
-mapped = map_to_4_classes(raw_kitti_ids)
-# Result: array([1, 2, 3, 0], dtype=uint8) (DRIVABLE, STATIC, OBJECT, TERRAIN)
-print(mapped)
-```
-
-Benefits:
-- Eliminates chained boolean masks (`pred == 40 | pred == 44`).
-- Constant-time O(1) memory lookup.
-- Zero allocations on the per-scan hot path.
-
----
-
-## 5. Relative Pose (`T_rel`) & Temporal Alignment
-
-Autonomous driving mapping must remain robot-centric to avoid coordinate drift over multi-kilometer sequences.
-
-### Mathematical Formulation
-The car's motion between consecutive frames is defined from the perspective of the LiDAR sensor via extrinsic conjugation:
-
-```
+```text
 T_rel = inv(Tr) @ inv(pose_curr) @ pose_prev @ Tr
 ```
 
-Where:
-- `pose_curr` is the (4, 4) absolute camera pose at time `t`.
-- `pose_prev` is the (4, 4) absolute camera pose at time `t - 1`.
-- `Tr` is the (4, 4) calibration matrix mapping Velodyne coordinates to Camera coordinates (`X_cam = Tr @ X_velo`).
-- `@` denotes standard matrix multiplication.
-
-### The Cardinal Golden Rule
-> [!IMPORTANT]
-> **The current scan's point cloud is NEVER transformed by `T_rel`.**
-> The current scan remains exactly as captured in the sensor frame (robot-centric at `[0, 0, 0]`).
-> `T_rel` is applied exclusively to warp the **historical map snapshot** backward by the ego-vehicle's movement before fusing new information.
-
-### Multi-Frame Temporal SalsaNext Integration
-When running temporal variants of SalsaNext (which take scans from `t` and `t - 1`):
-1. Load scan `t` using `loader[idx]`.
-2. Load scan `t - 1` using `loader[idx - 1]`.
-3. Compute `T_rel = loader.get_T_rel(idx)`.
-4. Transform points from `t - 1` into the current frame `t`:
-   `points_prev_in_curr = (T_rel @ points_prev_homogeneous.T).T`
-5. Project both clouds into their respective range images and stack them as multi-temporal channel inputs.
-
----
-
-## 6. End-to-End Integration Recipe
-
-The following standalone script demonstrates loading a frame, generating a 5-channel range image for SalsaNext, unprojecting predictions, and applying the 4-class taxonomy:
+- `pose_curr` and `pose_prev` are the car's global positions in camera coordinates.
+- `Tr` converts coordinates from the Velodyne LiDAR frame to the camera frame.
+- `T_rel` tells us: *"How does point (x, y, z) from the previous LiDAR sweep move into the current LiDAR frame?"*
 
 ```python
-import sys
-from pathlib import Path
-import numpy as np
+# Calculate relative motion from previous frame to current frame
+T_rel = loader.get_T_rel(frame_index=1)
 
-# Ensure fovmap is discoverable if running from workspace root
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-
-from fovmap.data.loader import SemanticKITTILoader
-from fovmap.data.remap import map_to_4_classes, LEARNING_MAP_INV
-
-def project_range_image(points, H=64, W=2048, fov_up=3.0, fov_down=-25.0):
-    """
-    Project an (N, 4) point cloud [x, y, z, intensity] into a (5, H, W) range image.
-    Returns:
-        proj_tensor: (5, H, W) float32 numpy array
-        proj_idx: (H, W) int32 point index map (-1 for empty pixels)
-    """
-    x, y, z, intensity = points[:, 0], points[:, 1], points[:, 2], points[:, 3]
-    depth = np.linalg.norm(points[:, :3], axis=1)
-
-    # Filter invalid points
-    valid = depth > 0.5
-    x, y, z, intensity, depth = x[valid], y[valid], z[valid], intensity[valid], depth[valid]
-    orig_indices = np.where(valid)[0]
-
-    # Spherical coordinates
-    yaw = -np.arctan2(y, x)
-    pitch = np.arcsin(z / depth)
-
-    fov_up_rad = np.deg2rad(fov_up)
-    fov_down_rad = np.deg2rad(fov_down)
-    total_fov = fov_up_rad - fov_down_rad
-
-    # Image projection indices
-    u = 0.5 * (1.0 - yaw / np.pi) * W
-    u = np.clip(np.floor(u).astype(np.int32), 0, W - 1)
-
-    v = (1.0 - (pitch + abs(fov_down_rad)) / total_fov) * H
-    v = np.clip(np.floor(v).astype(np.int32), 0, H - 1)
-
-    # Fill range tensor (sorting by depth descending so nearer points overwrite)
-    order = np.argsort(-depth)
-    u_sorted = u[order]
-    v_sorted = v[order]
-    depth_sorted = depth[order]
-    x_sorted = x[order]
-    y_sorted = y[order]
-    z_sorted = z[order]
-    intensity_sorted = intensity[order]
-    orig_idx_sorted = orig_indices[order]
-
-    proj_tensor = np.zeros((5, H, W), dtype=np.float32)
-    proj_idx = np.full((H, W), -1, dtype=np.int32)
-
-    proj_tensor[0, v_sorted, u_sorted] = depth_sorted
-    proj_tensor[1, v_sorted, u_sorted] = x_sorted
-    proj_tensor[2, v_sorted, u_sorted] = y_sorted
-    proj_tensor[3, v_sorted, u_sorted] = z_sorted
-    proj_tensor[4, v_sorted, u_sorted] = intensity_sorted
-    proj_idx[v_sorted, u_sorted] = orig_idx_sorted
-
-    return proj_tensor, proj_idx
-
-# --- Usage Pipeline ---
-if __name__ == "__main__":
-    data_dir = Path("sample_kitti/sequences/08")
-    loader = SemanticKITTILoader(data_dir)
-
-    # 1. Fetch current frame
-    points, pose_curr, pose_prev, Tr, frame_id = loader[0]
-    T_rel = loader.get_T_rel(frame_id)
-
-    print(f"Loaded frame {frame_id}: {points.shape[0]} points")
-    print(f"T_rel translation vector: {T_rel[:3, 3]}")
-
-    # 2. Build SalsaNext range image
-    range_img, point_indices = project_range_image(points)
-    print(f"Range tensor shape: {range_img.shape}")
-
-    # 3. Simulate SalsaNext predictions (e.g. shape H, W)
-    # In practice: preds = salsanext_model(torch.from_numpy(range_img).unsqueeze(0))
-    # SalsaNext outputs 20 learning classes (0 to 19):
-    # e.g., 1 (car), 9 (road), 13 (building), 17 (terrain)
-    dummy_learning_preds = np.random.choice([1, 9, 13, 17], size=(64, 2048)).astype(np.uint32)
-
-    # 4. Unproject image labels back to original point cloud
-    # Points without a valid projection (filtered by depth or lost to pixel collisions)
-    # are assigned UNKNOWN (255) rather than being falsely mapped to 0 (TERRAIN).
-    UNKNOWN_LABEL = 255
-    classes_4 = np.full(points.shape[0], UNKNOWN_LABEL, dtype=np.uint8)
-
-    valid_mask = point_indices >= 0
-    projected_pt_indices = point_indices[valid_mask]
-    projected_learning_labels = dummy_learning_preds[valid_mask]
-
-    # Convert valid projected learning IDs to raw SemanticKITTI IDs (0-259)
-    projected_raw_kitti_labels = LEARNING_MAP_INV[projected_learning_labels]
-
-    # 5. Fast O(1) Taxonomy Remap for valid projected points
-    classes_4[projected_pt_indices] = map_to_4_classes(projected_raw_kitti_labels)
-
-    valid_pts_count = np.sum(classes_4 != UNKNOWN_LABEL)
-    print(f"Total points: {points.shape[0]}, valid projected & labeled: {valid_pts_count}")
-    print(f"Projected classes unique: {np.unique(classes_4[classes_4 != UNKNOWN_LABEL])}")
+print("T_rel 4x4 matrix:\n", T_rel)
+print("Forward distance traveled:", T_rel[2, 3], "meters")
 ```
+
+> [!TIP]
+> **Golden Rule of Mapping**:
+> Never transform the **current** point cloud by `T_rel`! The current scan is already in the right place (centered at the car). You only apply `T_rel` to shift **older** map data backward when merging history into the current view.
 
 ---
 
-## 7. Architectural Guardrails & Enforced Rules
+### 4. Turning Point Clouds into SalsaNext Range Images
 
-To maintain high throughput and avoid architectural drift, the following constraints are enforced across the codebase:
+SalsaNext is a convolutional neural network designed for images. Before feeding a 3D point cloud into SalsaNext, we project the points onto a 2D spherical range image:
+- **Height (H)**: 64 rows (matching the 64 laser beams of the Velodyne HDL-64E).
+- **Width (W)**: 2048 columns (representing 360 degrees around the vehicle).
+- **5 Channels**: `[range, x, y, z, intensity]`.
 
-1. **Pure NumPy on Hot Path**:
-   All operations between scan reading, range projection, unprojection, and grid insertion must execute strictly with NumPy. Do not use PyTorch tensors for grid operations or spatial sorting.
-2. **Forbidden Dependencies**:
-   - `open3d` is prohibited (unnecessary memory overhead and heavy C++ bindings).
-   - `scikit-learn` RANSAC or DBSCAN is prohibited.
-   - `filterpy` Kalman filters are prohibited.
-3. **Decoupled Visualization**:
-   The Streamlit dashboard (`src/fovmap/dashboard`) reads pre-saved `.npz` files from `outputs/`. It must never import `src/fovmap/pipeline` or execute model inference during user rendering loops.
-4. **Exact Point Count Invariant**:
-   Every point processed by the pipeline must either be assigned to a grid cell or accounted for in an explicit out-of-bounds counter (`assert counts.sum() == N`).
+Here is the spherical math in plain text:
+- Range (distance): `r = sqrt(x^2 + y^2 + z^2)`
+- Horizontal angle (yaw): `yaw = -atan2(y, x)`
+- Vertical angle (pitch): `pitch = arcsin(z / r)`
+- Column index `u`: `u = 0.5 * (1.0 - yaw / pi) * 2048`
+- Row index `v`: `v = (1.0 - (pitch + 25 degrees) / 28 degrees) * 64`
+
+Points closer to the sensor take priority if multiple points land on the same pixel.
+
+---
+
+### 5. Fast Semantic Remapping (20 Classes ➔ 4 Classes)
+
+SalsaNext outputs 20 different learning classes (like `1` for car, `9` for road, `13` for building). For navigation and grid mapping, we simplify these into **4 high-level classes**:
+
+| ID | Class Name | Description | Included KITTI Objects |
+|:--:|:-----------|:------------|:-----------------------|
+| **0** | **TERRAIN** | Ground not safe or intended for normal driving | Dirt, grass, vegetation, sidewalk |
+| **1** | **DRIVABLE** | Safe driving surfaces | Road, highway, parking lots, lane markings |
+| **2** | **STATIC** | Fixed obstacles the vehicle cannot drive through | Buildings, poles, fences, tree trunks |
+| **3** | **OBJECT** | Movable or dynamic actors | Cars, trucks, pedestrians, cyclists |
+
+Instead of slow Python `if-else` checks, we use a 2-step lookup table:
+
+```python
+import numpy as np
+from fovmap.data.remap import map_to_4_classes, LEARNING_MAP_INV
+
+# 1. Suppose SalsaNext predicts these 4 classes for 4 points:
+#    9 (road), 13 (building), 1 (car), 17 (terrain)
+salsanext_predictions = np.array([9, 13, 1, 17], dtype=np.uint32)
+
+# 2. Step 1: Map SalsaNext learning IDs to raw KITTI IDs (instant array indexing)
+raw_kitti_ids = LEARNING_MAP_INV[salsanext_predictions]
+# Result: [40 (road), 50 (building), 10 (car), 72 (terrain)]
+
+# 3. Step 2: Map raw KITTI IDs to our 4-class taxonomy
+final_classes = map_to_4_classes(raw_kitti_ids)
+# Result: [1 (DRIVABLE), 2 (STATIC), 3 (OBJECT), 0 (TERRAIN)]
+
+print("Final 4-class output:", final_classes)
+```
+
+> [!NOTE]
+> What about points lost during 2D range projection?
+> Points that could not be projected (e.g. filtered out by minimum range or hidden behind nearer points) are given label `255` (`UNKNOWN`). This prevents unprojected points from accidentally being marked as `TERRAIN` (0).
+
+---
+
+## 🧪 The Verification Suite (`verify_gates.py`)
+
+We provide an automated gate verification script to ensure all data pipelines, math calculations, and lookup tables are working properly:
+
+```bash
+# Verify the sample sequence
+python verify_gates.py -s 08
+
+# Verify a full dataset sequence (e.g., sequence 04)
+python verify_gates.py -d /path/to/kitti/dataset -s 04
+
+# Provide a specific ground-truth relative pose file
+python verify_gates.py -s 08 -g sample_kitti/sequences/08/GROUND_TRUTH_T_rel.txt
+```
+
+### CLI Flags Cheat Sheet
+
+| Flag | Long Flag | Default | What It Does |
+|---|---|---|---|
+| `-s` | `--seq` | `"04"` | Sequence ID to test (e.g. `08` for sample data) |
+| `-d` | `--data-root` | `sample_kitti` | Path to folder containing the `sequences/` directory |
+| `-g` | `--gt-file` | `None` | Optional explicit path to `GROUND_TRUTH_T_rel.txt` |
+
+### What Each Gate Checks
+
+1. **Gate A1 (Scan Reader)**: Verifies that `.bin` point clouds load with correct 4-float fields (`x, y, z, intensity`), file sizes match expected byte counts, values are finite, and intensity is within `[0.0, 1.0]`.
+2. **Gate A2 (Poses)**: Checks that `poses.txt` loads 12-column matrices into `(4, 4)` transformations, frame 0 is an identity matrix, and vehicle translation between frames is reasonable (0.1m to 5.0m).
+3. **Gate A3 (Calibration)**: Verifies that `calib.txt` parses the `Tr` sensor-to-camera matrix, the bottom row is `[0, 0, 0, 1]`, and the rotation submatrix determinant is 1.0.
+4. **Gate A4 (Single Frame Access)**: Tests `SemanticKITTILoader[0]` to ensure frame 0 retrieval is fast and accurate.
+5. **Gate A5 (Sequence Iteration)**: Loops through all scans in the sequence to ensure none are empty or corrupt.
+6. **Gate B1 (Relative Motion T_rel)**: Compares computed `T_rel` transformations against ground truth. Fails with an error if the ground-truth file is missing or contains no valid transitions.
+7. **Gate REMAP (4-Class Taxonomy)**: Verifies the 260-element and 20-element lookup tables against reference classes.
+
+---
+
+## ❓ Common Questions & Troubleshooting
+
+### Q: I see `zsh: command not found: python`
+**A:** The system Python may not be linked in your terminal. Either activate the virtual environment:
+```bash
+source .venv/bin/activate
+```
+or run directly with:
+```bash
+./.venv/bin/python verify_gates.py -s 08
+```
+
+### Q: `python verify_gates.py` fails with `File not found ... sequences/04`
+**A:** By default, `verify_gates.py` looks for sequence `"04"` (the standard benchmark sequence in full SemanticKITTI). The sample dataset in this repository only bundles sequence `"08"`. Simply pass `-s 08`:
+```bash
+python verify_gates.py -s 08
+```
+
+### Q: Why do we use pure NumPy instead of PyTorch or Open3D?
+**A:** Speed and simplicity! Data loading, coordinate math, and lookup table indexing with NumPy are extremely fast (sub-millisecond per frame) and avoid heavy external dependencies or GPU transfers during preprocessing.
+
+### Q: What should I do if a ground-truth file is missing for my sequence?
+**A:** Gate B1 checks your computed relative poses against known ground-truth transitions. If you have your own ground truth file, provide it using the `-g` flag:
+```bash
+python verify_gates.py -s <seq_id> -g /path/to/GROUND_TRUTH_T_rel.txt
+```
+If no ground truth is provided, the script will let you know and exit with an error.
+
+---
+
+## 🚦 Core Guidelines for Contributors
+
+1. **Keep the hot path in pure NumPy**: Don't introduce heavy libraries (like `open3d` or `scikit-learn`) into `fovmap.data`.
+2. **Never drop points silently**: Every valid LiDAR point should either map to a grid cell or be counted as out-of-bounds.
+3. **Keep the robot at the center**: Point clouds in the current frame should always stay in the vehicle's reference frame. Older maps are transformed to match the vehicle, not the other way around.
