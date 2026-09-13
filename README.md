@@ -1,5 +1,8 @@
 # Foveated Semantic 2.5D LiDAR Mapping
 
+> **Status: Work in Progress**  
+> This project is actively being built for the Smart India Hackathon (SIH). The data ingestion, calibration, relative motion tracking, and class remapping modules are complete and tested. Full pipeline integration and range-image projection are currently underway.
+
 Personal fork of our team's Smart India Hackathon (SIH) project. While this repository contains our full collaborative codebase, this fork showcases my work leading the **Data & Pose Subsystem (Person 1)**.
 
 ---
@@ -34,6 +37,14 @@ In our 6-person pipeline, my module is the entry point for the whole system: rea
 
 * **Test & Verification Suite (`verify_gates.py`)**
   * Built a 7-stage verification script to test point dimensions, byte alignment, transform math, and label mapping before data gets handed to downstream teammates.
+
+### Subsystem Progress:
+- [x] Raw `.bin` point cloud ingestion (pure NumPy)
+- [x] Calibration parsing & relative motion tracking (`T_rel`)
+- [x] Dynamic multi-frame sequence loader
+- [x] Fast 20-to-4 class taxonomy remapper
+- [x] 7-stage verification test suite
+- [ ] Spherical range-image projection `(64, 2048, C)` for neural network input (In progress)
 
 ---
 
